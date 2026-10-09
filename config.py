@@ -1,0 +1,28 @@
+PIR_PINS = {
+    1: 17,
+    2: 27,
+    3: 22,
+    4: 23,
+}
+
+ADS1115_ADDRESS = 0x48
+LDR_BRIGHT_THRESHOLD_V = 1.65
+
+LED_PINS = {
+    1: 5,
+    2: 6,
+    3: 13,
+    4: 19,
+}
+
+FAN_RELAY_PINS = {
+    1: 24,
+    2: 25,
+}
+RELAY_ACTIVE_LOW = True
+
+AC_MOTOR_PIN = 26
+
+OCCUPANCY_HOLD_SECONDS = 300
+AC_ON_TEMP_C = 28
+AC_OFF_TEMP_C = 26

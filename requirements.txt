@@ -1,2 +1,5 @@
 streamlit
 pandas
+gpiozero
+adafruit-circuitpython-dht
+adafruit-circuitpython-ads1x15
