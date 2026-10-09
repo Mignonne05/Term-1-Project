@@ -1,5 +1,7 @@
 import csv
 import time
+import firebase_admin
+from firebase_admin import db
 from contextlib import ExitStack
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +13,8 @@ from automation.controller import RoomController
 from sensors.dht11_sensor import DHT11Sensor
 from sensors.ldr_sensor import LDRSensors
 from sensors.pir_sensor import PIRSensors
+
+
 
 
 LOG_PATH = Path(__file__).resolve().parent / "room_log.csv"
@@ -30,6 +34,13 @@ FIELDNAMES += ["fan1_on", "fan2_on", "ac_motor_on"]
 
 
 def main():
+    firebase_admin.initialize_app(options={
+        "databaseURL": (
+            "https://smart-classroom-119ef-default-rtdb."
+            "asia-southeast1.firebasedatabase.app"
+        )
+    })
+    
     controller = RoomController()
 
     with ExitStack() as stack:
@@ -109,6 +120,10 @@ def main():
 
                 writer.writerow(row)
                 log_file.flush()
+                try:
+                    db.reference("rooms/lecture_room_1/current").set(row)
+                except Exception as error:
+                    print(f"Firebase upload failed: {error}")
                 print(f"Saved reading: {row['timestamp']}")
                 time.sleep(2)
 
