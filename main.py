@@ -68,7 +68,7 @@ def main():
 
             if not log_has_header:
                 writer.writeheader()
-
+            last_history_upload = time.monotonic() - 60
             while True:
                 motion = pir.read_zones()
                 light = ldr.read_zones()
@@ -122,8 +122,14 @@ def main():
                 log_file.flush()
                 try:
                     db.reference("rooms/lecture_room_1/current").set(row)
+
+                    now = time.monotonic()
+                    if now - last_history_upload >= 60:
+                        db.reference("rooms/lecture_room_1/history").push(row)
+                        last_history_upload = now
                 except Exception as error:
                     print(f"Firebase upload failed: {error}")
+
                 print(f"Saved reading: {row['timestamp']}")
                 time.sleep(2)
 
