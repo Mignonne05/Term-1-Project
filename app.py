@@ -1,85 +1,159 @@
+import json
+import logging
+
 import pandas as pd
 import streamlit as st
+import firebase_admin
+from firebase_admin import credentials, db
 
-# Configure the page layout
+
 st.set_page_config(
-    page_title="Smart Lecture Room Dashboard", page_icon="⚡", layout="wide"
+    page_title="Smart Lecture Room Dashboard",
+    page_icon="⚡",
+    layout="wide",
 )
 
-st.title("🎓 Smart Energy Efficiency & Automated Control System")
-st.markdown(
-    "Live monitoring dashboard for university"
-    " lecture rooms."
-)
+st.title("🎓 Smart Lecture Room Dashboard")
 
 
-# --- MOCK DATA (Fake data so you can build the UI without a database) ---
-def get_mock_data():
-  data = {
-      "timestamp": [
-          "2026-10-07 13:00:00",
-          "2026-10-07 12:55:00",
-          "2026-10-07 12:50:00",
-          "2026-10-07 12:45:00",
-          "2026-10-07 12:40:00",
-      ],
-      "occupancy": [1, 1, 0, 0, 1],
-      "temperature": [28.5, 29.0, 27.5, 26.8, 28.1],
-      "humidity": [60.0, 62.0, 58.0, 55.0, 59.0],
-      "light_intensity": [350.0, 400.0, 120.0, 90.0, 310.0],
-      "energy_consumption": [120.5, 135.0, 15.0, 12.5, 118.0],
-  }
-  df = pd.DataFrame(data)
-  # Convert timestamp to actual datetime so charts format it cleanly
-  df["timestamp"] = pd.to_datetime(df["timestamp"])
-  return df
+@st.cache_resource
+def get_firebase_app():
+    try:
+        return firebase_admin.get_app("lecture_room_dashboard")
+    except ValueError:
+        service_account = json.loads(
+            st.secrets["FIREBASE_SERVICE_ACCOUNT_JSON"]
+        )
+        credential = credentials.Certificate(service_account)
 
-df = get_mock_data()
-latest = df.iloc[0]
+        return firebase_admin.initialize_app(
+            credential,
+            {"databaseURL": st.secrets["FIREBASE_DATABASE_URL"]},
+            name="lecture_room_dashboard",
+        )
 
-# --- SECTION 1: REAL-TIME METRICS ---
-st.subheader("🔴 Live Room Status (Mock View)")
-col1, col2, col3, col4 = st.columns(4)
 
-with col1:
-  occupancy_text = "Occupied 🟢" if latest["occupancy"] == 1 else "Empty 🔴"
-  st.metric(
-      label="Room Occupancy", value=occupancy_text, help="Detected via PIR sensor"
-  )
+def show_state(value):
+    if value is True:
+        return "On"
+    if value is False:
+        return "Off"
+    return "—"
 
-with col2:
-  st.metric(
-      label="Temperature",
-      value=f"{latest['temperature']} °C",
-      help="Temperature & Humidity sensor",
-  )
 
-with col3:
-  st.metric(
-      label="Light Intensity",
-      value=f"{latest['light_intensity']} lux",
-      help="Measured via LDR sensor",
-  )
+@st.fragment(run_every="5s")
+def show_dashboard():
+    try:
+        app = get_firebase_app()
+        room = db.reference("rooms/lecture_room_1", app=app)
+        current = room.child("current").get()
+        history = (
+            room.child("history")
+            .order_by_key()
+            .limit_to_last(100)
+            .get()
+        )
+    except Exception:
+        logging.exception("Could not read Firebase")
+        st.error("Could not read Firebase. Check the app Secrets and logs.")
+        return
 
-with col4:
-  st.metric(
-      label="Current Power",
-      value=f"{latest['energy_consumption']} W",
-      help="Active electrical load",
-  )
+    if not isinstance(current, dict):
+        st.info("Waiting for real sensor readings from the Raspberry Pi.")
+        return
 
-# --- SECTION 2: EQUIPMENT CONTROL PANEL ---
-st.subheader("⚙️ Controlled Equipment Status")
-eq_col1, eq_col2 = st.columns(2)
-with eq_col1:
-  st.info("**Lighting System:** Auto-ON (Low Ambient Light)")
-with eq_col2:
-  st.info("**AC / Fans:** Regulated based on occupancy")
+    st.caption(f"Last reading: {current.get('timestamp', 'Unknown')}")
 
-# --- SECTION 3: ENERGY ANALYTICS & TRENDS ---
-st.subheader("📈 Energy Consumption Over Time")
-st.line_chart(df, x="timestamp", y="energy_consumption")
+    occupied_values = [
+        current.get(f"zone{zone}_occupied")
+        for zone in range(1, 5)
+    ]
+    if any(value is True for value in occupied_values):
+        room_status = "Occupied"
+    elif all(value is False for value in occupied_values):
+        room_status = "Empty"
+    else:
+        room_status = "Unknown"
 
-# --- SECTION 4: HISTORICAL DATA TABLE ---
-st.subheader("📋 Raw Sensor Logs")
-st.dataframe(df, use_container_width=True)
+    temperature = current.get("temperature_c")
+    humidity = current.get("humidity_percent")
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Room occupancy", room_status)
+    col2.metric(
+        "Temperature",
+        f"{temperature:.1f} °C"
+        if isinstance(temperature, (int, float)) else "—",
+    )
+    col3.metric(
+        "Humidity",
+        f"{humidity:.1f} %"
+        if isinstance(humidity, (int, float)) else "—",
+    )
+
+    st.subheader("Four zones")
+    zone_rows = []
+    for zone in range(1, 5):
+        zone_rows.append({
+            "Zone": zone,
+            "Motion": show_state(current.get(f"zone{zone}_motion")),
+            "Occupied": show_state(
+                current.get(f"zone{zone}_occupied")
+            ),
+            "LDR voltage (V)": current.get(f"zone{zone}_light_v"),
+            "Bright": show_state(current.get(f"zone{zone}_bright")),
+            "LED": show_state(current.get(f"zone{zone}_led_on")),
+        })
+    st.dataframe(pd.DataFrame(zone_rows), hide_index=True)
+
+    st.subheader("Equipment")
+    fan1, fan2, motor = st.columns(3)
+    fan1.metric("Fan 1", show_state(current.get("fan1_on")))
+    fan2.metric("Fan 2", show_state(current.get("fan2_on")))
+    motor.metric("AC motor", show_state(current.get("ac_motor_on")))
+
+    if isinstance(history, dict) and history:
+        records = [
+            record for record in history.values()
+            if isinstance(record, dict)
+        ]
+        if records:
+            df = pd.DataFrame(records)
+            if "timestamp" in df.columns:
+                df["timestamp"] = pd.to_datetime(
+                    df["timestamp"], errors="coerce", utc=True
+                )
+                df = df.dropna(subset=["timestamp"])
+                df = df.sort_values("timestamp")
+
+                st.subheader("History")
+                for column, title in [
+                    ("temperature_c", "Temperature (°C)"),
+                    ("humidity_percent", "Humidity (%)"),
+                ]:
+                    if column in df.columns:
+                        st.write(title)
+                        st.line_chart(
+                            df.set_index("timestamp")[[column]]
+                        )
+
+                light_columns = [
+                    f"zone{zone}_light_v" for zone in range(1, 5)
+                ]
+                available = [
+                    column for column in light_columns
+                    if column in df.columns
+                ]
+                if available:
+                    st.write("LDR voltage by zone (V)")
+                    st.line_chart(
+                        df.set_index("timestamp")[available]
+                    )
+
+                st.subheader("Recent readings")
+                st.dataframe(df.sort_values(
+                    "timestamp", ascending=False
+                ), hide_index=True)
+
+
+show_dashboard()
